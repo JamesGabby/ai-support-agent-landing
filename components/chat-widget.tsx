@@ -2,7 +2,7 @@
 
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { useState, useId, useRef, useEffect } from "react";
+import { useState, useId, useRef, useEffect, useCallback } from "react";
 import { 
   Send, 
   Sparkles, 
@@ -21,8 +21,10 @@ import {
 export default function ChatWidget() {
   const [input, setInput] = useState("");
   const [isFocused, setIsFocused] = useState(false);
+  const [isInputActive, setIsInputActive] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   const uniqueId = useId();
 
   const { messages, sendMessage, status } = useChat({
@@ -49,27 +51,76 @@ export default function ChatWidget() {
 
   useEffect(() => {
     if (messages.length === 0) {
-      inputRef.current?.focus();
+      // Delay focus to prevent issues on mobile
+      const timer = setTimeout(() => {
+        inputRef.current?.focus();
+      }, 300);
+      return () => clearTimeout(timer);
     }
+  }, [messages.length]);
+
+  // Handle input focus for mobile
+  const handleInputFocus = useCallback(() => {
+    setIsFocused(true);
+    setIsInputActive(true);
   }, []);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleInputBlur = useCallback(() => {
+    setIsFocused(false);
+    // Delay deactivation to allow click events to complete
+    setTimeout(() => {
+      setIsInputActive(false);
+    }, 200);
+  }, []);
+
+  const handleSubmit = useCallback((e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading) return;
+    e.stopPropagation();
+    
+    const trimmedInput = input.trim();
+    if (!trimmedInput || isLoading) return;
 
     sendMessage({
       role: "user",
-      parts: [{ type: "text", text: input }],
+      parts: [{ type: "text", text: trimmedInput }],
     });
     setInput("");
-  };
+    
+    // Refocus input after sending on mobile
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 100);
+  }, [input, isLoading, sendMessage]);
 
-  const handleQuickAction = (text: string) => {
+  const handleQuickAction = useCallback((text: string) => {
+    // Prevent quick action if input is active
+    if (isInputActive) return;
+    
     sendMessage({
       role: "user",
       parts: [{ type: "text", text }],
     });
-  };
+  }, [isInputActive, sendMessage]);
+
+  // Prevent touch events on quick actions from interfering with input
+  const handleQuickActionClick = useCallback((e: React.MouseEvent | React.TouchEvent, text: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (isInputActive || isFocused) return;
+    
+    handleQuickAction(text);
+  }, [isInputActive, isFocused, handleQuickAction]);
+
+  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setInput(e.target.value);
+  }, []);
+
+  // Handle touch on input container to ensure focus
+  const handleInputContainerTouch = useCallback((e: React.TouchEvent) => {
+    // Don't prevent default - let the touch go through to focus the input
+    inputRef.current?.focus();
+  }, []);
 
   const getMessageText = (message: any): string => {
     if (message.content) return message.content;
@@ -102,8 +153,8 @@ export default function ChatWidget() {
       description: "Free 30-min consultation"
     },
     { 
-      label: "Ask a question", 
-      shortLabel: "Ask Question",
+      label: "What can you help with?", 
+      shortLabel: "Get Help",
       icon: HelpCircle,
       description: "Tech stack, timeline, etc."
     },
@@ -126,7 +177,7 @@ export default function ChatWidget() {
       </div>
 
       {/* Premium Header - Responsive padding and sizing */}
-      <header className="relative z-10">
+      <header className="relative z-10 flex-shrink-0">
         <div className="relative bg-gradient-to-r from-violet-600 via-purple-600 to-fuchsia-600 text-white px-4 py-3 sm:px-5 sm:py-4 md:px-6 md:py-5 shadow-xl">
           {/* Animated shimmer overlay */}
           <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />
@@ -189,14 +240,14 @@ export default function ChatWidget() {
       {/* Messages Area */}
       <main 
         ref={messagesContainerRef}
-        className="flex-1 overflow-y-auto relative z-10" 
+        className="flex-1 overflow-y-auto relative z-10 overscroll-contain" 
         role="log" 
         aria-live="polite" 
         aria-label="Chat messages"
       >
         <div className="p-3 sm:p-4 md:p-6 space-y-4 sm:space-y-5 md:space-y-6">
           {/* Welcome State */}
-          {messages.length === 0 && (
+          {messages.length === 0 && !isInputActive && (
             <div className="flex flex-col items-center justify-center py-4 sm:py-6 animate-fadeIn">
               {/* Welcome Icon - Responsive sizing */}
               <div className="relative mb-4 sm:mb-6">
@@ -221,21 +272,23 @@ export default function ChatWidget() {
                 {quickActions.map((action, index) => (
                   <button
                     key={action.label}
-                    onClick={() => handleQuickAction(action.label)}
-                    className="group relative p-3 sm:p-4 bg-white/80 backdrop-blur-sm border border-slate-200/80 rounded-xl sm:rounded-2xl hover:border-purple-300 hover:bg-white hover:shadow-lg hover:shadow-purple-500/10 transition-all duration-300 hover:-translate-y-1 text-left active:scale-[0.98]"
+                    onClick={(e) => handleQuickActionClick(e, action.label)}
+                    onTouchEnd={(e) => handleQuickActionClick(e, action.label)}
+                    type="button"
+                    disabled={isInputActive || isFocused}
+                    className="group relative p-3 sm:p-4 bg-white/80 backdrop-blur-sm border border-slate-200/80 rounded-xl sm:rounded-2xl hover:border-purple-300 hover:bg-white hover:shadow-lg hover:shadow-purple-500/10 transition-all duration-300 hover:-translate-y-1 text-left active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none touch-manipulation"
                     style={{ animationDelay: `${index * 0.1}s` }}
                     aria-label={`${action.label}: ${action.description}`}
                   >
                     {/* Hover gradient */}
-                    <div className="absolute inset-0 rounded-xl sm:rounded-2xl bg-gradient-to-br from-violet-500/5 to-fuchsia-500/5 opacity-0 group-hover:opacity-100 transition-opacity" aria-hidden="true" />
+                    <div className="absolute inset-0 rounded-xl sm:rounded-2xl bg-gradient-to-br from-violet-500/5 to-fuchsia-500/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" aria-hidden="true" />
                     
-                    <div className="relative flex items-start gap-2.5 sm:gap-3">
+                    <div className="relative flex items-start gap-2.5 sm:gap-3 pointer-events-none">
                       <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl bg-gradient-to-br from-violet-100 to-fuchsia-100 flex items-center justify-center group-hover:from-violet-200 group-hover:to-fuchsia-200 transition-colors flex-shrink-0">
                         <action.icon size={18} className="sm:w-5 sm:h-5 text-purple-600" />
                       </div>
                       <div className="flex-1 min-w-0">
                         <span className="text-xs sm:text-sm font-semibold text-slate-800 block leading-tight">
-                          {/* Show short label on mobile, full label on larger screens */}
                           <span className="xs:hidden">{action.shortLabel}</span>
                           <span className="hidden xs:inline">{action.label}</span>
                         </span>
@@ -257,11 +310,14 @@ export default function ChatWidget() {
                   {suggestedQuestions.map((question, index) => (
                     <button
                       key={question}
-                      onClick={() => handleQuickAction(question)}
-                      className="px-2.5 py-1 sm:px-3 sm:py-1.5 text-[10px] sm:text-xs bg-white/60 hover:bg-white border border-slate-200/80 hover:border-purple-300 rounded-full text-slate-600 hover:text-purple-700 transition-all duration-200 hover:shadow-sm active:scale-95"
+                      onClick={(e) => handleQuickActionClick(e, question)}
+                      onTouchEnd={(e) => handleQuickActionClick(e, question)}
+                      type="button"
+                      disabled={isInputActive || isFocused}
+                      className="px-2.5 py-1 sm:px-3 sm:py-1.5 text-[10px] sm:text-xs bg-white/60 hover:bg-white border border-slate-200/80 hover:border-purple-300 rounded-full text-slate-600 hover:text-purple-700 transition-all duration-200 hover:shadow-sm active:scale-95 disabled:opacity-50 disabled:pointer-events-none touch-manipulation"
                       style={{ animationDelay: `${0.4 + index * 0.05}s` }}
                     >
-                      <span className="line-clamp-1">{question}</span>
+                      <span className="line-clamp-1 pointer-events-none">{question}</span>
                     </button>
                   ))}
                 </div>
@@ -317,10 +373,10 @@ export default function ChatWidget() {
                   >
                     {/* Inner glow for user messages */}
                     {isUser && (
-                      <div className="absolute inset-0 rounded-2xl rounded-br-md bg-gradient-to-br from-white/10 to-transparent" aria-hidden="true" />
+                      <div className="absolute inset-0 rounded-2xl rounded-br-md bg-gradient-to-br from-white/10 to-transparent pointer-events-none" aria-hidden="true" />
                     )}
                     
-                    <p className="relative text-xs sm:text-sm whitespace-pre-wrap leading-relaxed">
+                    <p className="relative text-xs sm:text-sm whitespace-pre-wrap leading-relaxed select-text">
                       {text}
                     </p>
                   </div>
@@ -359,30 +415,36 @@ export default function ChatWidget() {
           )}
 
           {/* Follow-up Suggestions - Responsive */}
-          {messages.length > 0 && messages.length <= 4 && !isLoading && (
+          {messages.length > 0 && messages.length <= 4 && !isLoading && !isInputActive && (
             <div className="flex flex-wrap gap-1.5 sm:gap-2 pl-9 sm:pl-11 animate-fadeIn">
               {messages.length === 2 && (
                 <>
                   <button
-                    onClick={() => handleQuickAction("What's the typical timeline?")}
-                    className="px-2.5 py-1 sm:px-3 sm:py-1.5 text-[10px] sm:text-xs bg-white/80 hover:bg-white border border-slate-200/80 hover:border-purple-300 rounded-full text-slate-600 hover:text-purple-700 transition-all duration-200 active:scale-95"
+                    onClick={(e) => handleQuickActionClick(e, "What's the typical timeline?")}
+                    type="button"
+                    disabled={isInputActive || isFocused}
+                    className="px-2.5 py-1 sm:px-3 sm:py-1.5 text-[10px] sm:text-xs bg-white/80 hover:bg-white border border-slate-200/80 hover:border-purple-300 rounded-full text-slate-600 hover:text-purple-700 transition-all duration-200 active:scale-95 disabled:opacity-50 touch-manipulation"
                   >
-                    <Clock size={10} className="sm:w-3 sm:h-3 inline mr-0.5 sm:mr-1" />
-                    Timeline?
+                    <Clock size={10} className="sm:w-3 sm:h-3 inline mr-0.5 sm:mr-1 pointer-events-none" />
+                    <span className="pointer-events-none">Timeline?</span>
                   </button>
                   <button
-                    onClick={() => handleQuickAction("Can I see your portfolio?")}
-                    className="px-2.5 py-1 sm:px-3 sm:py-1.5 text-[10px] sm:text-xs bg-white/80 hover:bg-white border border-slate-200/80 hover:border-purple-300 rounded-full text-slate-600 hover:text-purple-700 transition-all duration-200 active:scale-95"
+                    onClick={(e) => handleQuickActionClick(e, "Can I see your portfolio?")}
+                    type="button"
+                    disabled={isInputActive || isFocused}
+                    className="px-2.5 py-1 sm:px-3 sm:py-1.5 text-[10px] sm:text-xs bg-white/80 hover:bg-white border border-slate-200/80 hover:border-purple-300 rounded-full text-slate-600 hover:text-purple-700 transition-all duration-200 active:scale-95 disabled:opacity-50 touch-manipulation"
                   >
-                    <Briefcase size={10} className="sm:w-3 sm:h-3 inline mr-0.5 sm:mr-1" />
-                    Portfolio
+                    <Briefcase size={10} className="sm:w-3 sm:h-3 inline mr-0.5 sm:mr-1 pointer-events-none" />
+                    <span className="pointer-events-none">Portfolio</span>
                   </button>
                   <button
-                    onClick={() => handleQuickAction("How do I get started?")}
-                    className="px-2.5 py-1 sm:px-3 sm:py-1.5 text-[10px] sm:text-xs bg-white/80 hover:bg-white border border-slate-200/80 hover:border-purple-300 rounded-full text-slate-600 hover:text-purple-700 transition-all duration-200 active:scale-95"
+                    onClick={(e) => handleQuickActionClick(e, "How do I get started?")}
+                    type="button"
+                    disabled={isInputActive || isFocused}
+                    className="px-2.5 py-1 sm:px-3 sm:py-1.5 text-[10px] sm:text-xs bg-white/80 hover:bg-white border border-slate-200/80 hover:border-purple-300 rounded-full text-slate-600 hover:text-purple-700 transition-all duration-200 active:scale-95 disabled:opacity-50 touch-manipulation"
                   >
-                    <Rocket size={10} className="sm:w-3 sm:h-3 inline mr-0.5 sm:mr-1" />
-                    Get started
+                    <Rocket size={10} className="sm:w-3 sm:h-3 inline mr-0.5 sm:mr-1 pointer-events-none" />
+                    <span className="pointer-events-none">Get started</span>
                   </button>
                 </>
               )}
@@ -394,44 +456,60 @@ export default function ChatWidget() {
       </main>
 
       {/* Premium Input Area - Responsive */}
-      <footer className="relative z-10 p-3 sm:p-4 bg-white/80 backdrop-blur-xl border-t border-slate-200/80">
+      <footer className="relative z-20 p-3 sm:p-4 bg-white/95 backdrop-blur-xl border-t border-slate-200/80 flex-shrink-0">
         {/* Top gradient line */}
-        <div className="absolute top-0 left-3 right-3 sm:left-4 sm:right-4 h-px bg-gradient-to-r from-transparent via-purple-300/50 to-transparent" aria-hidden="true" />
+        <div className="absolute top-0 left-3 right-3 sm:left-4 sm:right-4 h-px bg-gradient-to-r from-transparent via-purple-300/50 to-transparent pointer-events-none" aria-hidden="true" />
 
-        <form onSubmit={handleSubmit} className="relative">
+        <form 
+          ref={formRef}
+          onSubmit={handleSubmit} 
+          className="relative"
+        >
           <label htmlFor="chat-input" className="sr-only">
             Type your message
           </label>
-          <div className={`relative flex items-center gap-2 sm:gap-3 p-1.5 sm:p-2 bg-white rounded-xl sm:rounded-2xl border-2 transition-all duration-300 shadow-sm ${
-            isFocused 
-              ? 'border-purple-400 shadow-lg shadow-purple-500/10' 
-              : 'border-slate-200 hover:border-slate-300'
-          }`}>
+          <div 
+            className={`relative flex items-center gap-2 sm:gap-3 p-1.5 sm:p-2 bg-white rounded-xl sm:rounded-2xl border-2 transition-all duration-300 shadow-sm ${
+              isFocused 
+                ? 'border-purple-400 shadow-lg shadow-purple-500/10' 
+                : 'border-slate-200 hover:border-slate-300'
+            }`}
+            onTouchStart={handleInputContainerTouch}
+          >
             {/* Input glow effect */}
             {isFocused && (
-              <div className="absolute inset-0 rounded-xl sm:rounded-2xl bg-gradient-to-r from-violet-500/5 via-fuchsia-500/5 to-violet-500/5 animate-pulse" aria-hidden="true" />
+              <div className="absolute inset-0 rounded-xl sm:rounded-2xl bg-gradient-to-r from-violet-500/5 via-fuchsia-500/5 to-violet-500/5 animate-pulse pointer-events-none" aria-hidden="true" />
             )}
 
             <input
               id="chat-input"
               ref={inputRef}
               type="text"
+              inputMode="text"
+              enterKeyHint="send"
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onFocus={() => setIsFocused(true)}
-              onBlur={() => setIsFocused(false)}
-              placeholder="Ask about services, pricing..."
-              className="relative flex-1 px-3 py-2.5 sm:px-4 sm:py-3 bg-transparent text-slate-800 placeholder-slate-400 focus:outline-none text-sm"
+              onChange={handleInputChange}
+              onFocus={handleInputFocus}
+              onBlur={handleInputBlur}
+              placeholder="Type your message..."
+              className="relative flex-1 px-3 py-2.5 sm:px-4 sm:py-3 bg-transparent text-slate-800 placeholder-slate-400 focus:outline-none text-base sm:text-sm appearance-none"
               disabled={isLoading}
               autoComplete="off"
+              autoCorrect="on"
+              autoCapitalize="sentences"
+              spellCheck="true"
               aria-describedby="chat-hint"
+              style={{
+                fontSize: '16px', // Prevents iOS zoom
+                WebkitAppearance: 'none',
+              }}
             />
 
             {/* Send Button - Responsive sizing */}
             <button
               type="submit"
               disabled={isLoading || input.trim() === ""}
-              className={`relative w-10 h-10 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl flex items-center justify-center transition-all duration-300 flex-shrink-0 ${
+              className={`relative w-10 h-10 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl flex items-center justify-center transition-all duration-300 flex-shrink-0 touch-manipulation ${
                 input.trim() && !isLoading
                   ? 'bg-gradient-to-br from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 shadow-lg shadow-purple-500/30 hover:shadow-xl hover:shadow-purple-500/40 hover:scale-105 active:scale-95'
                   : 'bg-slate-100 cursor-not-allowed'
@@ -440,12 +518,12 @@ export default function ChatWidget() {
             >
               {/* Button inner glow */}
               {input.trim() && !isLoading && (
-                <div className="absolute inset-0 rounded-lg sm:rounded-xl bg-gradient-to-br from-white/20 to-transparent" aria-hidden="true" />
+                <div className="absolute inset-0 rounded-lg sm:rounded-xl bg-gradient-to-br from-white/20 to-transparent pointer-events-none" aria-hidden="true" />
               )}
               
               <Send 
                 size={16} 
-                className={`sm:w-[18px] sm:h-[18px] relative transition-transform duration-300 ${
+                className={`sm:w-[18px] sm:h-[18px] relative transition-transform duration-300 pointer-events-none ${
                   input.trim() && !isLoading 
                     ? 'text-white translate-x-0.5 -translate-y-0.5' 
                     : 'text-slate-400'
@@ -508,6 +586,21 @@ export default function ChatWidget() {
           animation: slideIn 0.3s ease-out forwards;
         }
 
+        /* Prevent iOS zoom on input focus */
+        input[type="text"] {
+          font-size: 16px !important;
+        }
+
+        /* Better touch handling */
+        .touch-manipulation {
+          touch-action: manipulation;
+        }
+
+        /* Prevent overscroll */
+        .overscroll-contain {
+          overscroll-behavior: contain;
+        }
+
         /* Custom scrollbar - Thinner on mobile */
         ::-webkit-scrollbar {
           width: 4px;
@@ -554,6 +647,19 @@ export default function ChatWidget() {
           }
           .xs\\:grid-cols-2 {
             grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
+        /* Ensure proper stacking on iOS */
+        html, body {
+          height: 100%;
+          overflow: hidden;
+        }
+
+        /* Fix for iOS Safari keyboard */
+        @supports (-webkit-touch-callout: none) {
+          .h-screen {
+            height: -webkit-fill-available;
           }
         }
       `}</style>
