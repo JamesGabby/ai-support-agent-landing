@@ -35,10 +35,18 @@ export default function ChatWidget() {
 
   const isLoading = status === "streaming";
 
-  // Auto-scroll to bottom when new messages arrive
+  const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+
+  // Only scroll when user sends a message, not on AI responses
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (shouldAutoScroll && messages.length > 0) {
+      const lastMessage = messages[messages.length - 1];
+      // Only auto-scroll if the last message is from the user
+      if (lastMessage.role === "user") {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      }
+    }
+  }, [messages, shouldAutoScroll]);
 
   // Focus input on mount for better UX
   useEffect(() => {
